@@ -74,11 +74,45 @@ public class PodExecBookieAdminClient implements BookieAdminClient {
                 CRDConstants.LABEL_RESOURCESET, bookkeeperSetName));
     }
 
+    /**
+     * Orders bookies by their StatefulSet ordinal, ascending.
+     *
+     * <p>Do not compare the pod names as strings. A string sort puts "bookkeeper-9" after
+     * "bookkeeper-12", so any caller that takes bookies from the end of the list selects the wrong
+     * pods as soon as the set has 10 or more replicas. Kubernetes always deletes the highest
+     * ordinal first, so the list order must be numeric to agree with it.
+     */
+    static final Comparator<BookieInfo> ORDINAL_ORDER = Comparator
+            .comparingInt((BookieInfo b) -> podOrdinal(b.getPodResource().get().getMetadata().getName()))
+            .thenComparing(b -> b.getPodResource().get().getMetadata().getName());
+
+    /**
+     * Returns the StatefulSet ordinal of a pod, or {@link Integer#MAX_VALUE} if the name does not
+     * end in a number. An unparseable name sorts last but never throws, so a stray pod that matches
+     * the selector cannot break the autoscaler.
+     */
+    static int podOrdinal(String podName) {
+        if (podName == null) {
+            return Integer.MAX_VALUE;
+        }
+        final int dash = podName.lastIndexOf('-');
+        if (dash < 0 || dash == podName.length() - 1) {
+            log.warnf("Bookie pod name %s has no ordinal suffix, ordering it last", podName);
+            return Integer.MAX_VALUE;
+        }
+        try {
+            return Integer.parseInt(podName.substring(dash + 1));
+        } catch (NumberFormatException e) {
+            log.warnf("Bookie pod name %s has a non-numeric ordinal suffix, ordering it last", podName);
+            return Integer.MAX_VALUE;
+        }
+    }
+
     @Override
     public List<BookieInfo> collectBookieInfos() {
         this.bookieInfos = client.pods().inNamespace(namespace).withLabels(podSelector).resources()
                 .map(pod -> getBookieInfo(pod))
-                .sorted(Comparator.comparing(b -> b.podResource.get().getMetadata().getName())).toList();
+                .sorted(ORDINAL_ORDER).toList();
         return bookieInfos;
     }
 

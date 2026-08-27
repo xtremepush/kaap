@@ -27,9 +27,16 @@ public class BookieDecommissionUtil {
 
     public static int decommissionBookies(List<BookieAdminClient.BookieInfo> allBookies, int numToDecommission,
                                           BookieAdminClient bookieAdminClient) {
+        // allBookies must be in ascending StatefulSet ordinal order. Kubernetes removes the highest
+        // ordinal first, so the bookies to decommission are the ones at the end of the list.
         List<BookieAdminClient.BookieInfo> bookiesToRemove = new ArrayList<>();
         int sz = allBookies.size();
-        for (int i = sz - 1; i >= sz - numToDecommission; i--) {
+        int count = Math.min(numToDecommission, sz);
+        if (count < numToDecommission) {
+            log.warnf("Asked to decommission %d bookies but only %d are known, limiting to %d",
+                    numToDecommission, sz, count);
+        }
+        for (int i = sz - 1; i >= sz - count; i--) {
             bookiesToRemove.add(allBookies.get(i));
         }
         return decommissionBookies(bookiesToRemove, bookieAdminClient);
