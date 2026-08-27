@@ -39,7 +39,10 @@ public class BookieOrdinalOrderTest {
     private static final String PREFIX = "pulsar-bookkeeper-";
 
     private static BookieAdminClient.BookieInfo bookie(int ordinal) {
-        final String podName = PREFIX + ordinal;
+        return namedBookie(PREFIX + ordinal);
+    }
+
+    private static BookieAdminClient.BookieInfo namedBookie(String podName) {
         final Pod pod = new PodBuilder()
                 .withNewMetadata()
                 .withName(podName)
@@ -75,12 +78,31 @@ public class BookieOrdinalOrderTest {
         Assertions.assertEquals(12, PodExecBookieAdminClient.podOrdinal(PREFIX + "12"));
     }
 
+    /**
+     * A name we cannot read must sort first, not last. Bookies are taken from the end of the list, so
+     * a pod we cannot identify must never become a candidate for decommission.
+     */
     @Test
-    public void testUnparseableNameSortsLastAndDoesNotThrow() {
-        Assertions.assertEquals(Integer.MAX_VALUE, PodExecBookieAdminClient.podOrdinal(null));
-        Assertions.assertEquals(Integer.MAX_VALUE, PodExecBookieAdminClient.podOrdinal("no-ordinal-here"));
-        Assertions.assertEquals(Integer.MAX_VALUE, PodExecBookieAdminClient.podOrdinal("trailing-dash-"));
-        Assertions.assertEquals(Integer.MAX_VALUE, PodExecBookieAdminClient.podOrdinal("nodashatall"));
+    public void testUnparseableNameSortsFirstAndDoesNotThrow() {
+        Assertions.assertEquals(Integer.MIN_VALUE, PodExecBookieAdminClient.podOrdinal(null));
+        Assertions.assertEquals(Integer.MIN_VALUE, PodExecBookieAdminClient.podOrdinal("no-ordinal-here"));
+        Assertions.assertEquals(Integer.MIN_VALUE, PodExecBookieAdminClient.podOrdinal("trailing-dash-"));
+        Assertions.assertEquals(Integer.MIN_VALUE, PodExecBookieAdminClient.podOrdinal("nodashatall"));
+    }
+
+    /** An unrecognised pod is never selected, even when the whole set is scaled down. */
+    @Test
+    public void testUnparseableNameIsNeverDecommissioned() {
+        final List<BookieAdminClient.BookieInfo> bookies = thirteenBookiesUnordered();
+        bookies.add(namedBookie("stray-bookie-pod"));
+        bookies.sort(PodExecBookieAdminClient.ORDINAL_ORDER);
+
+        Assertions.assertEquals("stray-bookie-pod", podNames(bookies).get(0));
+
+        final RecordingBookieAdminClient adminClient = new RecordingBookieAdminClient();
+        BookieDecommissionUtil.decommissionBookies(bookies, 13, adminClient);
+
+        Assertions.assertFalse(adminClient.getDecommissionedPodNames().contains("stray-bookie-pod"));
     }
 
     /**
@@ -129,14 +151,29 @@ public class BookieOrdinalOrderTest {
                 adminClient.getDecommissionedPodNames());
     }
 
-    /** Asking for more bookies than exist must not overrun the list. */
+    /**
+     * If more bookies are requested than the pod list contains, the list is incomplete. Refuse the
+     * whole operation instead of decommissioning every visible bookie. The controller retries.
+     */
     @Test
-    public void testDecommissionRequestLargerThanSetIsClamped() {
+    public void testDecommissionRequestLargerThanSetIsRefused() {
         final List<BookieAdminClient.BookieInfo> bookies = thirteenBookiesUnordered();
         bookies.sort(PodExecBookieAdminClient.ORDINAL_ORDER);
 
         final RecordingBookieAdminClient adminClient = new RecordingBookieAdminClient();
-        final int decommissioned = BookieDecommissionUtil.decommissionBookies(bookies, 20, adminClient);
+        Assertions.assertThrows(IllegalStateException.class,
+                () -> BookieDecommissionUtil.decommissionBookies(bookies, 20, adminClient));
+        Assertions.assertTrue(adminClient.getDecommissionedPodNames().isEmpty());
+    }
+
+    /** The exact size of the set is allowed, so scaling a whole set to zero still works. */
+    @Test
+    public void testDecommissionRequestEqualToSetSizeIsAllowed() {
+        final List<BookieAdminClient.BookieInfo> bookies = thirteenBookiesUnordered();
+        bookies.sort(PodExecBookieAdminClient.ORDINAL_ORDER);
+
+        final RecordingBookieAdminClient adminClient = new RecordingBookieAdminClient();
+        final int decommissioned = BookieDecommissionUtil.decommissionBookies(bookies, 13, adminClient);
 
         Assertions.assertEquals(13, decommissioned);
         Assertions.assertEquals(13, adminClient.getDecommissionedPodNames().size());

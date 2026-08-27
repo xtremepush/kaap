@@ -87,24 +87,28 @@ public class PodExecBookieAdminClient implements BookieAdminClient {
             .thenComparing(b -> b.getPodResource().get().getMetadata().getName());
 
     /**
-     * Returns the StatefulSet ordinal of a pod, or {@link Integer#MAX_VALUE} if the name does not
-     * end in a number. An unparseable name sorts last but never throws, so a stray pod that matches
-     * the selector cannot break the autoscaler.
+     * Returns the StatefulSet ordinal of a pod, or {@link Integer#MIN_VALUE} if the name does not
+     * end in a number.
+     *
+     * <p>An unparseable name never throws, so a stray pod that matches the selector cannot break the
+     * autoscaler. It sorts first, not last, because callers take the bookies to decommission from the
+     * end of the list. A pod we cannot identify must never be a candidate for decommission.
      */
     static int podOrdinal(String podName) {
         if (podName == null) {
-            return Integer.MAX_VALUE;
+            log.warn("Bookie pod has no name, ordering it first");
+            return Integer.MIN_VALUE;
         }
         final int dash = podName.lastIndexOf('-');
         if (dash < 0 || dash == podName.length() - 1) {
-            log.warnf("Bookie pod name %s has no ordinal suffix, ordering it last", podName);
-            return Integer.MAX_VALUE;
+            log.warnf("Bookie pod name %s has no ordinal suffix, ordering it first", podName);
+            return Integer.MIN_VALUE;
         }
         try {
             return Integer.parseInt(podName.substring(dash + 1));
         } catch (NumberFormatException e) {
-            log.warnf("Bookie pod name %s has a non-numeric ordinal suffix, ordering it last", podName);
-            return Integer.MAX_VALUE;
+            log.warnf("Bookie pod name %s has a non-numeric ordinal suffix, ordering it first", podName);
+            return Integer.MIN_VALUE;
         }
     }
 
