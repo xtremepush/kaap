@@ -242,12 +242,18 @@ public class PodExecBookieAdminClient implements BookieAdminClient {
         String res = internalRecoverAndDeleteCookieInZk(bookieInfo, deleteCookie);
         log.debugf("Recover output: %s", res);
         if (!deleteCookie) {
-            if (!res.contains(
-                    "Recover bookie operation completed with rc: OK: No problem")) {
+            // Check for ERROR-level logs in JSON output, ignore WARN level
+            // Topology warnings (Failed to resolve network location) are non-fatal WARN level
+            if (res.contains("\"level\":\"ERROR\"") ||
+                res.contains("Error while recovering ledger") ||
+                res.contains("BK error") ||
+                res.contains("FAILED")) {
                 log.warnf("Recovery failed for bookie %s \n %s",
                         podName, res);
                 throw new IllegalStateException("Recovery failed for bookie " + podName);
             }
+            // Otherwise trust that recovery succeeded (exit code 0)
+            log.infof("Recovery completed for bookie %s (ignoring non-fatal warnings)", podName);
         } else {
             // todo: figure out better way to check if cookie got deleted or change recover command
             res = internalRecoverAndDeleteCookieInZk(bookieInfo, true);
