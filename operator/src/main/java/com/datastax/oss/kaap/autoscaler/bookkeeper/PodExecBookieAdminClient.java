@@ -242,9 +242,10 @@ public class PodExecBookieAdminClient implements BookieAdminClient {
         String res = internalRecoverAndDeleteCookieInZk(bookieInfo, deleteCookie);
         log.debugf("Recover output: %s", res);
         if (!deleteCookie) {
-            // Check for actual errors, not warnings
-            // Topology warnings (Failed to resolve network location) are non-fatal
-            if (res.contains("Error while recovering ledger") ||
+            // Check for ERROR-level logs in JSON output, ignore WARN level
+            // Topology warnings (Failed to resolve network location) are non-fatal WARN level
+            if (res.contains("\"level\":\"ERROR\"") ||
+                res.contains("Error while recovering ledger") ||
                 res.contains("BK error") ||
                 res.contains("FAILED")) {
                 log.warnf("Recovery failed for bookie %s \n %s",
